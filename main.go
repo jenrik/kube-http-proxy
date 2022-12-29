@@ -60,6 +60,8 @@ func (p *proxy) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 	//http://golang.org/src/pkg/net/http/client.go
 	req.RequestURI = ""
 
+	client := http.DefaultClient
+
 	// Check if we are proxying a kubernetes service url
 	if strings.HasSuffix(req.URL.Hostname(), ".svc.cluster.local") {
 		parts := strings.Split(req.URL.Hostname(), ".")
@@ -77,19 +79,22 @@ func (p *proxy) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 		req.URL.Host = "kubeproxy" // References the unix socket
 		req.URL.Scheme = "http+unix"
 		req.URL.Path = "/api/v1/namespaces/" + namespace + "/services/" + serviceName + ":" + servicePort + "/proxy" + req.URL.Path
+
+		client = p.client
 	}
 
 	delHopHeaders(req.Header)
 
-	resp, err := p.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		http.Error(wr, "Server Error", http.StatusInternalServerError)
-		log.Fatal("ServeHTTP:", err)
+		log.Println("Failed to connect:", err)
+		return
 	}
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
 		if err != nil {
-			panic(err)
+			log.Println("Failed to close response body", err)
 		}
 	}(resp.Body)
 
@@ -100,7 +105,7 @@ func (p *proxy) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 	copyHeader(wr.Header(), resp.Header)
 	wr.WriteHeader(resp.StatusCode)
 	if _, err = io.Copy(wr, resp.Body); err != nil {
-		panic(err)
+		log.Println("Failed to forward response body: ", err)
 	}
 }
 
